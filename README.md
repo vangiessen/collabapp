@@ -22,6 +22,14 @@ Real-time videobellen voor 2-3 deelnemers met Next.js en LiveKit:
   live niveaumeter plus gain-slider (0-200%) die het uitgaande niveau
   bijstelt vóórdat het verstuurd wordt. Voor elke binnenkomende deelnemer/bron
   een eigen VU-meter en volumeslider (0-100%) om te bepalen hoe luid jij ze hoort.
+- **Bestanden delen** via LiveKit's data channel (geen externe opslag nodig):
+  een "Bestanden"-knop opent een paneel om een bestand te kiezen en te
+  versturen, met voortgangsbalk, automatische chunking/reassembly voor grote
+  bestanden, een maximum van 100MB (met nette foutmelding erboven), een
+  downloadknop met de originele bestandsnaam zodra een bestand volledig is
+  ontvangen, en een lijst die toont wie wat wanneer heeft gestuurd. Valt de
+  verbinding halverwege weg, dan krijg je een duidelijke foutmelding in plaats
+  van een hangende voortgangsbalk.
 - Token-generatie via een server-side API-route (`/api/join`) met de LiveKit server SDK.
 
 ### 1. Installeren
@@ -192,6 +200,31 @@ schermdeel-track is, wordt die automatisch "gepind" (`usePinnedTracks` +
 in een `CarouselLayout` ernaast staan. Zonder schermdelen valt de weergave
 terug op een gewoon `GridLayout` van webcams.
 
+### Hoe bestanden delen werkt
+
+`FileTransferPanel` in [src/app/room/FileTransferPanel.tsx](src/app/room/FileTransferPanel.tsx)
+gebruikt LiveKit's ingebouwde data-stream-API — geen eigen chunking-protocol
+of externe opslag nodig:
+
+- **Versturen**: `localParticipant.sendFile(file, { onProgress })`. LiveKit
+  knipt het bestand zelf automatisch in stukjes voor het data channel; de
+  `onProgress`-callback voedt de voortgangsbalk. Bestanden groter dan 100MB
+  worden client-side geweigerd vóórdat er iets verstuurd wordt.
+- **Ontvangen**: `room.registerByteStreamHandler("file-transfer", ...)` geeft
+  per binnenkomend bestand een `ByteStreamReader` met metadata (`name`,
+  `size`, `mimeType`) en een eigen `onProgress`. `reader.readAll()` zet de
+  stukjes automatisch weer in elkaar; het resultaat wordt een `Blob` en een
+  downloadlink met de originele bestandsnaam.
+- **Overzicht**: omdat elk bestand standaard naar alle deelnemers gaat, bouwt
+  elke client zijn eigen (consistente) geschiedenis op — eigen verzonden
+  bestanden plus alles wat binnenkomt, elk met afzender en tijdstip. Geen
+  aparte synchronisatie nodig.
+- **Afgebroken overdracht**: als de verzender halverwege de verbinding
+  verliest, laat LiveKit de onderliggende stream falen met een
+  `DataStreamError` ("... unexpectedly disconnected in the middle of sending
+  data"); die vangen we op en tonen als foutmelding bij dat bestand, in
+  plaats van een oneindig hangende voortgangsbalk.
+
 ### Latency
 
 Er zijn geen aangepaste SFU-instellingen nodig — dit project gebruikt de
@@ -204,6 +237,7 @@ al geoptimaliseerd zijn voor lage latency via WebRTC.
 - `src/app/admin/page.tsx` — beveiligde admin-pagina: links genereren, bekijken, intrekken
 - `src/app/invite/[token]/page.tsx` — gastpagina: controleert de link en vraagt je naam
 - `src/app/room/page.tsx` — videokamer (leest de sessie uit `sessionStorage` en rendert de LiveKit UI)
+- `src/app/room/FileTransferPanel.tsx` — bestanden versturen/ontvangen via LiveKit's data channel
 - `src/lib/invites.ts` — opslag en logica voor uitnodigingstokens (Upstash Redis)
 - `src/app/api/admin/invites/route.ts` — admin-only: lijst opvragen / nieuwe link aanmaken
 - `src/app/api/admin/invites/revoke/route.ts` — admin-only: link intrekken

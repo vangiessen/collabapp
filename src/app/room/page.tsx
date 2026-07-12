@@ -32,6 +32,7 @@ import {
   type TrackPublishOptions,
 } from "livekit-client";
 import styles from "./room.module.css";
+import { FileTransferPanel } from "./FileTransferPanel";
 
 type AudioSlotConfig = {
   key: string;
@@ -472,6 +473,11 @@ function RoomUI({
               Scherm delen
             </TrackToggle>
           </div>
+        </div>
+
+        <div className={styles.audioSlot}>
+          <span className={styles.audioSlotLabel}>Delen</span>
+          <FileTransferPanel />
         </div>
 
         <DisconnectButton className={styles.leaveButton}>Verlaten</DisconnectButton>
