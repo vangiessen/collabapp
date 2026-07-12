@@ -200,6 +200,18 @@ schermdeel-track is, wordt die automatisch "gepind" (`usePinnedTracks` +
 in een `CarouselLayout` ernaast staan. Zonder schermdelen valt de weergave
 terug op een gewoon `GridLayout` van webcams.
 
+Het gedeelde scherm heeft een fullscreen-knop rechtsboven
+(`ScreenShareFocus`), die de standaard browser Fullscreen API gebruikt
+(`element.requestFullscreen()`/`document.exitFullscreen()`). In fullscreen
+vervaagt de knop na een paar seconden zonder muisbeweging en verschijnt weer
+bij muisbeweging; Escape werkt automatisch via de browser (geen eigen
+key-handler nodig — dat regelt de Fullscreen API zelf, wij luisteren alleen
+naar `fullscreenchange` om de knoptekst/staat te synchroniseren). Omdat
+`RoomAudioRenderer` buiten dit element in de DOM staat, blijft alle audio
+gewoon doorspelen in fullscreen. De video zelf rekt niet uit: LiveKit's eigen
+CSS zet `object-fit: contain` specifiek voor schermdeel-tracks, dus de
+verhouding blijft altijd correct (met eventuele zwarte balken).
+
 ### Hoe bestanden delen werkt
 
 `FileTransferPanel` in [src/app/room/FileTransferPanel.tsx](src/app/room/FileTransferPanel.tsx)

@@ -19,6 +19,7 @@ import {
   useLocalParticipant,
   isTrackReference,
   type TrackReference,
+  type TrackReferenceOrPlaceholder,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import {
@@ -389,6 +390,72 @@ function RemoteAudioMixer() {
   );
 }
 
+const CONTROLS_HIDE_DELAY_MS = 3000;
+
+// Toont het gedeelde scherm met een fullscreen-knop rechtsboven. In
+// fullscreen vervaagt die knop na een paar seconden zonder muisbeweging en
+// verschijnt weer zodra de muis beweegt; Escape werkt vanzelf via de
+// browser's eigen Fullscreen API. Audio blijft ongemoeid, want
+// RoomAudioRenderer staat buiten dit element in de DOM.
+function ScreenShareFocus({ trackRef }: { trackRef: TrackReferenceOrPlaceholder }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const nowFullscreen = document.fullscreenElement === containerRef.current;
+      setIsFullscreen(nowFullscreen);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      setControlsVisible(true);
+      if (nowFullscreen) {
+        hideTimerRef.current = setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_DELAY_MS);
+      }
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, []);
+
+  function handleMouseMove() {
+    setControlsVisible(true);
+    if (!isFullscreen) return;
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_DELAY_MS);
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement === containerRef.current) {
+        await document.exitFullscreen();
+      } else {
+        await containerRef.current?.requestFullscreen();
+      }
+    } catch (err) {
+      console.warn("Kon fullscreen niet wisselen:", err);
+    }
+  }
+
+  return (
+    <div ref={containerRef} className={styles.focusWrapper} onMouseMove={handleMouseMove}>
+      <FocusLayout trackRef={trackRef} />
+      <button
+        type="button"
+        onClick={toggleFullscreen}
+        className={`${styles.fullscreenButton} ${
+          controlsVisible ? "" : styles.fullscreenButtonHidden
+        }`}
+        aria-label={isFullscreen ? "Volledig scherm verlaten" : "Volledig scherm"}
+      >
+        {isFullscreen ? "⤡ Verkleinen" : "⤢ Volledig scherm"}
+      </button>
+    </div>
+  );
+}
+
 // Zodra iemand zijn scherm deelt, wordt dat automatisch "gepind" en groot
 // getoond; de webcams schuiven dan klein ernaast in een carousel. Zonder
 // scherm delen vallen we terug op een gewoon grid van webcams.
@@ -418,7 +485,7 @@ function RoomStage() {
           <CarouselLayout tracks={cameraTracks}>
             <ParticipantTile />
           </CarouselLayout>
-          <FocusLayout trackRef={focusTrack} />
+          <ScreenShareFocus trackRef={focusTrack} />
         </FocusLayoutContainer>
       ) : (
         <GridLayout tracks={cameraTracks} className={styles.stage}>
