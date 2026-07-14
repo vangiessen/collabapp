@@ -80,6 +80,13 @@ const roomOptions: RoomOptions = {
   dynacast: true,
 };
 
+// Zonder microfoon-toestemming geeft de browser (uit privacyoverwegingen)
+// lege labels en vaak maar één generieke "ingang" terug voor alle
+// audio-apparaten, ook als er in werkelijkheid meerdere aangesloten zijn
+// (bijv. een externe audio-interface). Zodra ergens toestemming is verleend
+// worden de echte namen zichtbaar — vraag die toestemming daarom hier vast
+// (kort, alleen om de apparaatlijst te kunnen tonen) in plaats van te wachten
+// tot iemand op "Starten" klikt.
 function useAudioInputDevices() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
 
@@ -87,9 +94,22 @@ function useAudioInputDevices() {
     let cancelled = false;
 
     async function loadDevices() {
-      const list = (await navigator.mediaDevices.enumerateDevices()).filter(
+      let list = (await navigator.mediaDevices.enumerateDevices()).filter(
         (d) => d.kind === "audioinput",
       );
+
+      if (list.length > 0 && list.every((d) => !d.label)) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((track) => track.stop());
+          list = (await navigator.mediaDevices.enumerateDevices()).filter(
+            (d) => d.kind === "audioinput",
+          );
+        } catch {
+          // Toestemming geweigerd: val terug op de (labelloze) lijst hierboven.
+        }
+      }
+
       if (!cancelled) setDevices(list);
     }
 
@@ -146,9 +166,14 @@ function VuMeter({ level }: { level: number }) {
 // en VU-meter. De track wordt handmatig opgebouwd via de Web Audio API zodat
 // een GainNode het niveau kan bijsturen vóórdat de audio gepubliceerd wordt,
 // en zodat een AnalyserNode datzelfde (post-gain) niveau kan meten.
-function AudioInputControl({ config }: { config: AudioSlotConfig }) {
+function AudioInputControl({
+  config,
+  devices,
+}: {
+  config: AudioSlotConfig;
+  devices: MediaDeviceInfo[];
+}) {
   const { localParticipant } = useLocalParticipant();
-  const devices = useAudioInputDevices();
   const [deviceId, setDeviceId] = useState("");
   const [active, setActive] = useState(false);
   const [gain, setGain] = useState(1);
@@ -503,6 +528,8 @@ function RoomUI({
   deviceWarning: string;
   onDismissDeviceWarning: () => void;
 }) {
+  const audioInputDevices = useAudioInputDevices();
+
   return (
     <div className={styles.roomLayout}>
       {deviceWarning && (
@@ -520,8 +547,8 @@ function RoomUI({
         <div className={styles.mixerSection}>
           <span className={styles.mixerTitle}>Uitgaand</span>
           <div className={styles.mixerRows}>
-            <AudioInputControl config={TALK_SLOT} />
-            <AudioInputControl config={MUSIC_SLOT} />
+            <AudioInputControl config={TALK_SLOT} devices={audioInputDevices} />
+            <AudioInputControl config={MUSIC_SLOT} devices={audioInputDevices} />
           </div>
         </div>
 
