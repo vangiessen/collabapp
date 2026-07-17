@@ -1,31 +1,30 @@
 import crypto from "node:crypto";
 import { Redis } from "@upstash/redis";
 
-// Elk token is een eigen Redis-key met een TTL: Redis ruimt verlopen tokens
-// zelf op, er is geen aparte opruimstap nodig. Zodra een token gebruikt of
-// ingetrokken wordt, verwijderen we de key direct (eenmalig gebruik). Omdat
-// Redis een verlopen key gewoon laat verdwijnen, kunnen we achteraf niet meer
-// zien of een onbekend token nooit bestond, al gebruikt was, of verlopen is
-// — die gevallen worden daarom hetzelfde behandeld ("not_found").
+// Elk token is een Redis-hash met een TTL: Redis ruimt verlopen tokens zelf
+// op. Anders dan eerst wordt een gebruikt token NIET meteen verwijderd —
+// het blijft (tot de oorspronkelijke vervaltijd) zichtbaar in de admin-lijst
+// met wie 'm heeft gebruikt, zodat daar een live online/offline-indicator
+// aan gekoppeld kan worden. Intrekken/verwijderen kan altijd handmatig.
 export type Invite = {
   token: string;
-  /** Doorlopend, persistent volgnummer (via Redis INCR) zodat je in de admin-
-   * lijst in één oogopslag ziet welke link het nieuwst is, ook als oudere
-   * links intussen verlopen/verbruikt en dus verwijderd zijn. */
-  seq: number;
   createdAt: number;
   expiresAt: number;
+  usedByIdentity: string | null;
+  usedByName: string | null;
+  usedAt: number | null;
 };
 
-type StoredInvite = {
-  seq: number;
-  createdAt: number;
+type StoredFields = {
+  createdAt?: number;
+  usedByIdentity?: string;
+  usedByName?: string;
+  usedAt?: number;
 };
 
 export type InviteStatus = "active" | "not_found";
 
 const KEY_PREFIX = "invite:";
-const COUNTER_KEY = "invite-counter";
 
 let redisClient: Redis | null = null;
 
@@ -41,12 +40,19 @@ export async function createInvite(ttlHours: number): Promise<Invite> {
   const token = crypto.randomBytes(32).toString("hex");
   const createdAt = Date.now();
   const ttlSeconds = Math.round(ttlHours * 60 * 60);
-  const seq = await redis.incr(COUNTER_KEY);
+  const key = `${KEY_PREFIX}${token}`;
 
-  const stored: StoredInvite = { seq, createdAt };
-  await redis.set(`${KEY_PREFIX}${token}`, stored, { ex: ttlSeconds });
+  await redis.hset(key, { createdAt });
+  await redis.expire(key, ttlSeconds);
 
-  return { token, seq, createdAt, expiresAt: createdAt + ttlSeconds * 1000 };
+  return {
+    token,
+    createdAt,
+    expiresAt: createdAt + ttlSeconds * 1000,
+    usedByIdentity: null,
+    usedByName: null,
+    usedAt: null,
+  };
 }
 
 export async function listInvites(): Promise<Invite[]> {
@@ -54,24 +60,50 @@ export async function listInvites(): Promise<Invite[]> {
   const keys = await redis.keys(`${KEY_PREFIX}*`);
   if (keys.length === 0) return [];
 
-  const pipeline = redis.pipeline();
+  // Filtert (en ruimt op) keys uit een ouder opslagformaat (platte string in
+  // plaats van hash) — anders crasht hgetall erop met een WRONGTYPE-fout.
+  const typePipeline = redis.pipeline();
   for (const key of keys) {
-    pipeline.get(key);
+    typePipeline.type(key);
+  }
+  const types = await typePipeline.exec<string[]>();
+
+  const hashKeys: string[] = [];
+  const legacyKeys: string[] = [];
+  keys.forEach((key, i) => {
+    if (types[i] === "hash") {
+      hashKeys.push(key);
+    } else {
+      legacyKeys.push(key);
+    }
+  });
+
+  if (legacyKeys.length > 0) {
+    await Promise.all(legacyKeys.map((key) => redis.del(key)));
+  }
+
+  if (hashKeys.length === 0) return [];
+
+  const pipeline = redis.pipeline();
+  for (const key of hashKeys) {
+    pipeline.hgetall(key);
     pipeline.ttl(key);
   }
-  const results = await pipeline.exec<Array<StoredInvite | number | null>>();
+  const results = await pipeline.exec<Array<StoredFields | null | number>>();
 
   const invites: Invite[] = [];
-  for (let i = 0; i < keys.length; i++) {
-    const value = results[i * 2] as StoredInvite | null;
+  for (let i = 0; i < hashKeys.length; i++) {
+    const fields = results[i * 2] as StoredFields | null;
     const ttl = results[i * 2 + 1] as number | null;
     // ttl <= 0 betekent dat de key net verlopen is tussen `keys()` en nu.
-    if (value == null || ttl == null || ttl <= 0) continue;
+    if (fields == null || fields.createdAt == null || ttl == null || ttl <= 0) continue;
     invites.push({
-      token: keys[i].slice(KEY_PREFIX.length),
-      seq: value.seq,
-      createdAt: value.createdAt,
+      token: hashKeys[i].slice(KEY_PREFIX.length),
+      createdAt: Number(fields.createdAt),
       expiresAt: Date.now() + ttl * 1000,
+      usedByIdentity: fields.usedByIdentity ?? null,
+      usedByName: fields.usedByName ?? null,
+      usedAt: fields.usedAt != null ? Number(fields.usedAt) : null,
     });
   }
 
@@ -86,19 +118,51 @@ export async function revokeInvite(token: string): Promise<boolean> {
 
 export async function checkInvite(token: string): Promise<InviteStatus> {
   const redis = getRedis();
-  const exists = await redis.exists(`${KEY_PREFIX}${token}`);
-  return exists > 0 ? "active" : "not_found";
+  const key = `${KEY_PREFIX}${token}`;
+  try {
+    const fields = await redis.hgetall<StoredFields>(key);
+    if (!fields || fields.createdAt == null || fields.usedByIdentity) {
+      return "not_found";
+    }
+    return "active";
+  } catch {
+    // Key uit een ouder opslagformaat (geen hash) — nooit geldig, opruimen.
+    await redis.del(key);
+    return "not_found";
+  }
 }
 
-// GETDEL is atomair: lezen én verwijderen gebeurt in één Redis-commando, dus
-// twee gelijktijdige joins met hetzelfde token kunnen niet allebei slagen.
+// hsetnx claimt het gebruik atomair op één specifiek veld: van twee
+// gelijktijdige pogingen met hetzelfde token wint er maar één (krijgt 1
+// terug), de ander krijgt 0 en wordt afgewezen.
 export async function consumeInvite(
   token: string,
+  identity: string,
+  name: string,
 ): Promise<{ ok: true } | { ok: false; status: InviteStatus }> {
   const redis = getRedis();
-  const value = await redis.getdel(`${KEY_PREFIX}${token}`);
-  if (value == null) {
+  const key = `${KEY_PREFIX}${token}`;
+
+  let claimed: 0 | 1;
+  try {
+    claimed = await redis.hsetnx(key, "usedByIdentity", identity);
+  } catch {
+    // Key uit een ouder opslagformaat (geen hash) — nooit geldig, opruimen.
+    await redis.del(key);
     return { ok: false, status: "not_found" };
   }
+  if (claimed !== 1) {
+    return { ok: false, status: "not_found" };
+  }
+
+  const ttl = await redis.ttl(key);
+  if (ttl == null || ttl <= 0) {
+    // Randgeval: de key bestond niet (meer) en hsetnx heeft 'm net als
+    // "phantom" hash zonder TTL aangemaakt — meteen weer opruimen.
+    await redis.del(key);
+    return { ok: false, status: "not_found" };
+  }
+
+  await redis.hset(key, { usedByName: name, usedAt: Date.now() });
   return { ok: true };
 }

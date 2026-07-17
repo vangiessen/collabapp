@@ -20,14 +20,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = await consumeInvite(token);
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: STATUS_MESSAGES[result.status] ?? "Deze uitnodigingslink is ongeldig." },
-      { status: 410 },
-    );
-  }
-
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   const wsUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
@@ -42,9 +34,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Identity moet uniek zijn per deelnemer (ook bij gelijke naam in meerdere tabbladen),
-  // "name" is de weergavenaam die andere deelnemers te zien krijgen.
+  // Identity moet uniek zijn per deelnemer (ook bij gelijke naam in meerdere
+  // tabbladen); wordt ook opgeslagen bij de invite zodat de admin-pagina kan
+  // zien of deze specifieke deelnemer nu live in de kamer zit.
   const identity = `${name}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const result = await consumeInvite(token, identity, name);
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: STATUS_MESSAGES[result.status] ?? "Deze uitnodigingslink is ongeldig." },
+      { status: 410 },
+    );
+  }
 
   const at = new AccessToken(apiKey, apiSecret, {
     identity,

@@ -5,9 +5,11 @@ import styles from "../ui.module.css";
 
 type Invite = {
   token: string;
-  seq: number;
   createdAt: number;
   expiresAt: number;
+  usedByIdentity: string | null;
+  usedByName: string | null;
+  usedAt: number | null;
 };
 
 type Participant = {
@@ -78,7 +80,8 @@ export default function AdminPage() {
     })();
   }, [fetchInvites]);
 
-  // Ververst wie er in de kamer is zolang je op de admin-pagina bent ingelogd.
+  // Ververst wie er in de kamer is én de links-lijst (voor de groen/rood-
+  // bolletjes) zolang je op de admin-pagina bent ingelogd.
   useEffect(() => {
     if (!authenticated) return;
 
@@ -98,6 +101,18 @@ export default function AdminPage() {
           );
         }
       }
+
+      try {
+        const list = await fetchInvites(adminKey);
+        if (!cancelled) {
+          setInvites(list);
+          setLoadError("");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLoadError(err instanceof Error ? err.message : "Kon uitnodigingen niet ophalen.");
+        }
+      }
     }
 
     poll();
@@ -106,7 +121,7 @@ export default function AdminPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [authenticated, adminKey, fetchParticipants]);
+  }, [authenticated, adminKey, fetchParticipants, fetchInvites]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -251,8 +266,10 @@ export default function AdminPage() {
               <div>
                 <h1>Uitnodigingslinks</h1>
                 <p className={styles.subtitle}>
-                  Alleen actieve links staan hieronder — gebruikte, verlopen of
-                  ingetrokken links verdwijnen direct uit deze lijst.
+                  Groen = degene die deze link gebruikte is nu online. Rood =
+                  nog niet gebruikt, of inmiddels weer uitgelogd. Links
+                  verdwijnen vanzelf na hun geldigheidsduur, of meteen als je
+                  ze intrekt/verwijdert.
                 </p>
               </div>
               <button className={styles.button} onClick={handleGenerate} disabled={generating}>
@@ -283,15 +300,22 @@ export default function AdminPage() {
                     <th>Aangemaakt</th>
                     <th>Verloopt</th>
                     <th>Link</th>
+                    <th>Status</th>
                     <th>Actie</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {invites.map((invite) => {
+                  {invites.map((invite, index) => {
                     const url = `${typeof window !== "undefined" ? window.location.origin : ""}/invite/${invite.token}`;
+                    const isOnline =
+                      invite.usedByIdentity != null &&
+                      participants.some((p) => p.identity === invite.usedByIdentity);
+                    const statusTitle = invite.usedByName
+                      ? `${invite.usedByName}${isOnline ? " is nu online" : " is niet (meer) online"}`
+                      : "Nog niet gebruikt";
                     return (
                       <tr key={invite.token}>
-                        <td>{invite.seq}</td>
+                        <td>{index + 1}</td>
                         <td>{formatDateTime(invite.createdAt)}</td>
                         <td>{formatDateTime(invite.expiresAt)}</td>
                         <td>
@@ -306,13 +330,20 @@ export default function AdminPage() {
                             </button>
                           </div>
                         </td>
+                        <td title={statusTitle}>
+                          <span
+                            className={`${styles.presenceDot} ${
+                              isOnline ? styles.presenceDotOnline : styles.presenceDotOffline
+                            }`}
+                          />
+                        </td>
                         <td>
                           <button
                             type="button"
                             className={styles.buttonDanger}
                             onClick={() => handleRevoke(invite.token)}
                           >
-                            Intrekken
+                            {invite.usedByIdentity ? "Verwijderen" : "Intrekken"}
                           </button>
                         </td>
                       </tr>
@@ -320,7 +351,7 @@ export default function AdminPage() {
                   })}
                   {invites.length === 0 && (
                     <tr>
-                      <td colSpan={5} style={{ color: "var(--text-secondary)", padding: 16 }}>
+                      <td colSpan={6} style={{ color: "var(--text-secondary)", padding: 16 }}>
                         Geen actieve uitnodigingen.
                       </td>
                     </tr>

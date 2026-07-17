@@ -4,10 +4,13 @@ Real-time videobellen voor 2-3 deelnemers met Next.js en LiveKit:
 
 - **Uitnodigingslinks als enige toegang**: een beschermde admin-pagina
   (`/admin`) om met één klik eenmalige, tijdelijke uitnodigingslinks te
-  genereren, bekijken en intrekken — elk genummerd (`#1`, `#2`, ...) zodat
-  meteen duidelijk is welke het nieuwst is. Gasten kunnen alleen via zo'n link
-  binnenkomen (naam invullen, geen account) — er is geen open "vul zelf een
-  kamercode in"-toegang meer.
+  genereren, bekijken en intrekken — genummerd naar positie in de lijst
+  (`#1` = nieuwste), zodat meteen duidelijk is welke het nieuwst is. Elke link
+  toont ook een groen/rood bolletje: groen zodra degene die de link gebruikte
+  nu online is in de kamer, rood als de link nog niet gebruikt is of die
+  persoon weer offline is. Gasten kunnen alleen via zo'n link binnenkomen
+  (naam invullen, geen account) — er is geen open "vul zelf een kamercode
+  in"-toegang meer.
 - **Live "wie is er nu in de kamer"-overzicht** op de admin-pagina: een groen
   bolletje per daadwerkelijk verbonden deelnemer, ververst elke 5 seconden.
 - Tweerichtings webcam (start uit, zelf aan/uit te zetten via de Camera-knop)
@@ -154,32 +157,37 @@ Zie [src/lib/invites.ts](src/lib/invites.ts) en de routes onder
 [src/app/api](src/app/api):
 
 - Elk token is `crypto.randomBytes(32).toString("hex")` (256 bits entropie) en
-  wordt opgeslagen als een losse key (`invite:<token>`) in **Upstash Redis**,
-  via hun REST-API (`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`) —
-  geen lokale schijf nodig, wat de app geschikt maakt voor Vercel's serverless
-  functies. Elke key krijgt een Redis-TTL gelijk aan de verlooptijd: Redis
-  ruimt verlopen tokens vanzelf op, er is geen aparte opruimstap nodig. Zodra
-  een token gebruikt of ingetrokken wordt, verwijderen we de key direct
-  (`GETDEL` resp. `DEL`) — er wordt geen gebruiksgeschiedenis bijgehouden. Een
-  apart, nooit-vervallend Redis-teller-key (`INCR`) geeft elke link een
-  doorlopend volgnummer, zodat de nieuwste altijd herkenbaar is ook al zijn
-  oudere links intussen verdwenen.
+  wordt opgeslagen als een Redis-**hash** (`invite:<token>`) in **Upstash
+  Redis**, via hun REST-API (`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`)
+  — geen lokale schijf nodig, wat de app geschikt maakt voor Vercel's
+  serverless functies. Elke key krijgt een Redis-TTL gelijk aan de
+  verlooptijd: Redis ruimt verlopen tokens vanzelf op. Anders dan bij de
+  eerdere opzet wordt een **gebruikt** token niet meer meteen verwijderd — het
+  blijft (tot de oorspronkelijke vervaltijd) in de lijst staan met wie 'm
+  gebruikte, zodat de admin-pagina daar een live groen/rood-bolletje aan kan
+  koppelen. Handmatig intrekken/verwijderen (`DEL`) kan altijd. De nummering
+  in de admin-lijst (`#1`, `#2`, ...) is simpelweg de positie in de huidige
+  lijst (nieuwste eerst), niet een permanent volgnummer — die begint dus
+  vanzelf weer bij 1 zodra oudere links verlopen of verwijderd zijn.
+- `POST /api/join` claimt het gebruik atomair via Redis' `HSETNX` op het
+  `usedByIdentity`-veld: van twee gelijktijdige pogingen met hetzelfde token
+  wint er maar één. De identity die daarbij wordt opgeslagen is exact dezelfde
+  die de gast straks als LiveKit-participant krijgt, zodat de admin-pagina
+  een gebruikte link kan cross-refereren tegen de live deelnemerslijst.
 - `GET /api/admin/participants` (ook admin-only) vraagt via LiveKit's
   server-SDK (`RoomServiceClient.listParticipants`) op wie er live in de
-  kamer aanwezig is — losstaand van de invite-opslag, want een gebruikt
-  token bestaat na het joinen niet meer om aan te koppelen.
+  kamer aanwezig is. De admin-pagina pollt zowel deze lijst als de
+  uitnodigingen elke 5 seconden en bepaalt per link of de gebruiker ervan nu
+  online is door `usedByIdentity` tegen die live lijst te vergelijken.
 - `POST /api/admin/invites` (maakt aan) en `GET /api/admin/invites` (lijst,
-  via `KEYS`+een pipeline van `GET`/`TTL` per token) en
-  `POST /api/admin/invites/revoke` (trekt in door de key te verwijderen) zijn
-  alleen bruikbaar met de juiste `x-admin-key`-header, gecontroleerd tegen
-  `ADMIN_KEY`. De admin-pagina bewaart je sleutel alleen in `sessionStorage`
-  (niet in een cookie) en stuurt hem mee bij elke actie.
+  via `KEYS`+een pipeline van `HGETALL`/`TTL` per token) en
+  `POST /api/admin/invites/revoke` (verwijdert de key) zijn alleen bruikbaar
+  met de juiste `x-admin-key`-header, gecontroleerd tegen `ADMIN_KEY`. De
+  admin-pagina bewaart je sleutel alleen in `sessionStorage` (niet in een
+  cookie) en stuurt hem mee bij elke actie.
 - `GET /api/invite/[token]` controleert de status zonder te verbruiken (voor
-  de "is deze link nog geldig?"-check op de gastpagina).
-- `POST /api/join` verbruikt het token atomair via Redis' `GETDEL` (lezen en
-  verwijderen in één commando, dus geen race condition bij gelijktijdige
-  pogingen met hetzelfde token) en genereert pas dán een LiveKit-token voor de
-  vaste `ROOM_NAME`-kamer.
+  de "is deze link nog geldig?"-check op de gastpagina) — een reeds gebruikt
+  token telt daarbij ook als ongeldig.
 - De gast krijgt zijn LiveKit-token via `/invite/[token]` teruggestuurd,
   bewaart het in `sessionStorage` en wordt doorgestuurd naar `/room`, dat dat
   token uitleest — zo hoeft een ververste `/room`-pagina niet opnieuw een
