@@ -5,9 +5,18 @@ import styles from "../ui.module.css";
 
 type Invite = {
   token: string;
+  seq: number;
   createdAt: number;
   expiresAt: number;
 };
+
+type Participant = {
+  identity: string;
+  name: string;
+  joinedAt: number;
+};
+
+const PARTICIPANTS_POLL_MS = 5000;
 
 function formatDateTime(ms: number) {
   return new Date(ms).toLocaleString("nl-NL", {
@@ -29,6 +38,9 @@ export default function AdminPage() {
   const [newInviteUrl, setNewInviteUrl] = useState("");
   const [copyFeedback, setCopyFeedback] = useState("");
 
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participantsError, setParticipantsError] = useState("");
+
   const fetchInvites = useCallback(async (key: string) => {
     const res = await fetch("/api/admin/invites", {
       headers: { "x-admin-key": key },
@@ -38,6 +50,17 @@ export default function AdminPage() {
       throw new Error(data.error ?? "Kon uitnodigingen niet ophalen.");
     }
     return data.invites as Invite[];
+  }, []);
+
+  const fetchParticipants = useCallback(async (key: string) => {
+    const res = await fetch("/api/admin/participants", {
+      headers: { "x-admin-key": key },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error ?? "Kon deelnemers niet ophalen.");
+    }
+    return data.participants as Participant[];
   }, []);
 
   useEffect(() => {
@@ -54,6 +77,36 @@ export default function AdminPage() {
       }
     })();
   }, [fetchInvites]);
+
+  // Ververst wie er in de kamer is zolang je op de admin-pagina bent ingelogd.
+  useEffect(() => {
+    if (!authenticated) return;
+
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const list = await fetchParticipants(adminKey);
+        if (!cancelled) {
+          setParticipants(list);
+          setParticipantsError("");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setParticipantsError(
+            err instanceof Error ? err.message : "Kon deelnemers niet ophalen.",
+          );
+        }
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, PARTICIPANTS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authenticated, adminKey, fetchParticipants]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -165,85 +218,116 @@ export default function AdminPage() {
   return (
     <div className={styles.page}>
       <main className={styles.main}>
-        <div className={`${styles.card} ${styles.cardWide}`}>
-          <div className={styles.toolbar}>
-            <div>
-              <h1>Uitnodigingslinks</h1>
-              <p className={styles.subtitle}>
-                Alleen actieve links staan hieronder — gebruikte, verlopen of
-                ingetrokken links verdwijnen direct uit deze lijst.
-              </p>
-            </div>
-            <button className={styles.button} onClick={handleGenerate} disabled={generating}>
-              {generating ? "Bezig..." : "Nieuwe link genereren"}
-            </button>
+        <div className={styles.stack}>
+          <div className={`${styles.card} ${styles.cardWide}`}>
+            <h1>Wie is er nu in de kamer</h1>
+            <p className={styles.subtitle}>
+              Live overzicht, ververst elke {PARTICIPANTS_POLL_MS / 1000} seconden.
+            </p>
+
+            {participantsError && <p className={styles.error}>{participantsError}</p>}
+
+            <ul className={styles.presenceList}>
+              {participants.map((p) => (
+                <li key={p.identity} className={styles.presenceItem}>
+                  <span className={`${styles.presenceDot} ${styles.presenceDotOnline}`} />
+                  <span>{p.name}</span>
+                  <span className={styles.presenceJoined}>
+                    sinds {formatDateTime(p.joinedAt)}
+                  </span>
+                </li>
+              ))}
+              {participants.length === 0 && !participantsError && (
+                <li className={styles.presenceItem}>
+                  <span className={`${styles.presenceDot} ${styles.presenceDotOffline}`} />
+                  <span style={{ color: "var(--text-secondary)" }}>Niemand aanwezig.</span>
+                </li>
+              )}
+            </ul>
           </div>
 
-          {newInviteUrl && (
-            <div className={styles.linkCell} style={{ marginBottom: 20 }}>
-              <span className={styles.linkText}>{newInviteUrl}</span>
-              <button
-                type="button"
-                className={styles.buttonSecondary}
-                onClick={() => copyToClipboard(newInviteUrl)}
-              >
-                {copyFeedback || "Kopiëren"}
+          <div className={`${styles.card} ${styles.cardWide}`}>
+            <div className={styles.toolbar}>
+              <div>
+                <h1>Uitnodigingslinks</h1>
+                <p className={styles.subtitle}>
+                  Alleen actieve links staan hieronder — gebruikte, verlopen of
+                  ingetrokken links verdwijnen direct uit deze lijst.
+                </p>
+              </div>
+              <button className={styles.button} onClick={handleGenerate} disabled={generating}>
+                {generating ? "Bezig..." : "Nieuwe link genereren"}
               </button>
             </div>
-          )}
 
-          {loadError && <p className={styles.error}>{loadError}</p>}
+            {newInviteUrl && (
+              <div className={styles.linkCell} style={{ marginBottom: 20 }}>
+                <span className={styles.linkText}>{newInviteUrl}</span>
+                <button
+                  type="button"
+                  className={styles.buttonSecondary}
+                  onClick={() => copyToClipboard(newInviteUrl)}
+                >
+                  {copyFeedback || "Kopiëren"}
+                </button>
+              </div>
+            )}
 
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Aangemaakt</th>
-                  <th>Verloopt</th>
-                  <th>Link</th>
-                  <th>Actie</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invites.map((invite) => {
-                  const url = `${typeof window !== "undefined" ? window.location.origin : ""}/invite/${invite.token}`;
-                  return (
-                    <tr key={invite.token}>
-                      <td>{formatDateTime(invite.createdAt)}</td>
-                      <td>{formatDateTime(invite.expiresAt)}</td>
-                      <td>
-                        <div className={styles.linkCell}>
-                          <span className={styles.linkText}>{url}</span>
+            {loadError && <p className={styles.error}>{loadError}</p>}
+
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Aangemaakt</th>
+                    <th>Verloopt</th>
+                    <th>Link</th>
+                    <th>Actie</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invites.map((invite) => {
+                    const url = `${typeof window !== "undefined" ? window.location.origin : ""}/invite/${invite.token}`;
+                    return (
+                      <tr key={invite.token}>
+                        <td>{invite.seq}</td>
+                        <td>{formatDateTime(invite.createdAt)}</td>
+                        <td>{formatDateTime(invite.expiresAt)}</td>
+                        <td>
+                          <div className={styles.linkCell}>
+                            <span className={styles.linkText}>{url}</span>
+                            <button
+                              type="button"
+                              className={styles.buttonSecondary}
+                              onClick={() => copyToClipboard(url)}
+                            >
+                              Kopiëren
+                            </button>
+                          </div>
+                        </td>
+                        <td>
                           <button
                             type="button"
-                            className={styles.buttonSecondary}
-                            onClick={() => copyToClipboard(url)}
+                            className={styles.buttonDanger}
+                            onClick={() => handleRevoke(invite.token)}
                           >
-                            Kopiëren
+                            Intrekken
                           </button>
-                        </div>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className={styles.buttonDanger}
-                          onClick={() => handleRevoke(invite.token)}
-                        >
-                          Intrekken
-                        </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {invites.length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ color: "var(--text-secondary)", padding: 16 }}>
+                        Geen actieve uitnodigingen.
                       </td>
                     </tr>
-                  );
-                })}
-                {invites.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ color: "var(--text-secondary)", padding: 16 }}>
-                      Geen actieve uitnodigingen.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </main>

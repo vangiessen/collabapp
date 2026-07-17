@@ -9,13 +9,23 @@ import { Redis } from "@upstash/redis";
 // — die gevallen worden daarom hetzelfde behandeld ("not_found").
 export type Invite = {
   token: string;
+  /** Doorlopend, persistent volgnummer (via Redis INCR) zodat je in de admin-
+   * lijst in één oogopslag ziet welke link het nieuwst is, ook als oudere
+   * links intussen verlopen/verbruikt en dus verwijderd zijn. */
+  seq: number;
   createdAt: number;
   expiresAt: number;
+};
+
+type StoredInvite = {
+  seq: number;
+  createdAt: number;
 };
 
 export type InviteStatus = "active" | "not_found";
 
 const KEY_PREFIX = "invite:";
+const COUNTER_KEY = "invite-counter";
 
 let redisClient: Redis | null = null;
 
@@ -31,10 +41,12 @@ export async function createInvite(ttlHours: number): Promise<Invite> {
   const token = crypto.randomBytes(32).toString("hex");
   const createdAt = Date.now();
   const ttlSeconds = Math.round(ttlHours * 60 * 60);
+  const seq = await redis.incr(COUNTER_KEY);
 
-  await redis.set(`${KEY_PREFIX}${token}`, createdAt, { ex: ttlSeconds });
+  const stored: StoredInvite = { seq, createdAt };
+  await redis.set(`${KEY_PREFIX}${token}`, stored, { ex: ttlSeconds });
 
-  return { token, createdAt, expiresAt: createdAt + ttlSeconds * 1000 };
+  return { token, seq, createdAt, expiresAt: createdAt + ttlSeconds * 1000 };
 }
 
 export async function listInvites(): Promise<Invite[]> {
@@ -47,17 +59,18 @@ export async function listInvites(): Promise<Invite[]> {
     pipeline.get(key);
     pipeline.ttl(key);
   }
-  const results = await pipeline.exec<Array<number | null>>();
+  const results = await pipeline.exec<Array<StoredInvite | number | null>>();
 
   const invites: Invite[] = [];
   for (let i = 0; i < keys.length; i++) {
-    const createdAt = results[i * 2];
-    const ttl = results[i * 2 + 1];
+    const value = results[i * 2] as StoredInvite | null;
+    const ttl = results[i * 2 + 1] as number | null;
     // ttl <= 0 betekent dat de key net verlopen is tussen `keys()` en nu.
-    if (createdAt == null || ttl == null || ttl <= 0) continue;
+    if (value == null || ttl == null || ttl <= 0) continue;
     invites.push({
       token: keys[i].slice(KEY_PREFIX.length),
-      createdAt,
+      seq: value.seq,
+      createdAt: value.createdAt,
       expiresAt: Date.now() + ttl * 1000,
     });
   }

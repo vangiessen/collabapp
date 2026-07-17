@@ -4,9 +4,12 @@ Real-time videobellen voor 2-3 deelnemers met Next.js en LiveKit:
 
 - **Uitnodigingslinks als enige toegang**: een beschermde admin-pagina
   (`/admin`) om met één klik eenmalige, tijdelijke uitnodigingslinks te
-  genereren, bekijken en intrekken. Gasten kunnen alleen via zo'n link
+  genereren, bekijken en intrekken — elk genummerd (`#1`, `#2`, ...) zodat
+  meteen duidelijk is welke het nieuwst is. Gasten kunnen alleen via zo'n link
   binnenkomen (naam invullen, geen account) — er is geen open "vul zelf een
   kamercode in"-toegang meer.
+- **Live "wie is er nu in de kamer"-overzicht** op de admin-pagina: een groen
+  bolletje per daadwerkelijk verbonden deelnemer, ververst elke 5 seconden.
 - Tweerichtings webcam (start uit, zelf aan/uit te zetten via de Camera-knop)
 - **Schermdelen met automatische focus-layout**: zodra iemand zijn scherm
   deelt, wordt dat groot getoond met de webcams klein ernaast (niet allemaal
@@ -152,7 +155,14 @@ Zie [src/lib/invites.ts](src/lib/invites.ts) en de routes onder
   functies. Elke key krijgt een Redis-TTL gelijk aan de verlooptijd: Redis
   ruimt verlopen tokens vanzelf op, er is geen aparte opruimstap nodig. Zodra
   een token gebruikt of ingetrokken wordt, verwijderen we de key direct
-  (`GETDEL` resp. `DEL`) — er wordt geen gebruiksgeschiedenis bijgehouden.
+  (`GETDEL` resp. `DEL`) — er wordt geen gebruiksgeschiedenis bijgehouden. Een
+  apart, nooit-vervallend Redis-teller-key (`INCR`) geeft elke link een
+  doorlopend volgnummer, zodat de nieuwste altijd herkenbaar is ook al zijn
+  oudere links intussen verdwenen.
+- `GET /api/admin/participants` (ook admin-only) vraagt via LiveKit's
+  server-SDK (`RoomServiceClient.listParticipants`) op wie er live in de
+  kamer aanwezig is — losstaand van de invite-opslag, want een gebruikt
+  token bestaat na het joinen niet meer om aan te koppelen.
 - `POST /api/admin/invites` (maakt aan) en `GET /api/admin/invites` (lijst,
   via `KEYS`+een pipeline van `GET`/`TTL` per token) en
   `POST /api/admin/invites/revoke` (trekt in door de key te verwijderen) zijn
