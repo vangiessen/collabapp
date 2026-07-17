@@ -25,6 +25,11 @@ Real-time videobellen voor 2-3 deelnemers met Next.js en LiveKit:
   live niveaumeter plus gain-slider (0-200%) die het uitgaande niveau
   bijstelt vóórdat het verstuurd wordt. Voor elke binnenkomende deelnemer/bron
   een eigen VU-meter en volumeslider (0-100%) om te bepalen hoe luid jij ze hoort.
+- **Audio-uitgang kiezen**: net als bij de ingangen kun je ook het apparaat
+  kiezen waarop je iedereen hoort (bijv. een specifieke koptelefoon of de
+  uitgang van een audio-interface). Werkt alleen in browsers die
+  `setSinkId` ondersteunen (Chromium-gebaseerd; niet Firefox/Safari) — in
+  andere browsers verschijnt de keuze simpelweg niet.
 - **Bestanden delen** via LiveKit's data channel (geen externe opslag nodig):
   een "Bestanden"-knop opent een paneel om een bestand te kiezen en te
   versturen, met voortgangsbalk, automatische chunking/reassembly voor grote
@@ -199,6 +204,13 @@ Zie [src/app/room/page.tsx](src/app/room/page.tsx):
   `createAudioAnalyser()` een VU-meter gevoed, en regelt de slider het
   afspeelvolume via `RemoteAudioTrack.setVolume()` — dit beïnvloedt alleen wat
   jij hoort, niet wat anderen ontvangen.
+- **Audio-uitgang** (`AudioOutputControl`): gebruikt LiveKit's eigen
+  `useMediaDeviceSelect({ kind: "audiooutput" })`-hook, die intern
+  `room.switchActiveDevice("audiooutput", deviceId)` aanroept — dat zet
+  `HTMLMediaElement.setSinkId()` op alle huidige én toekomstige audio-elementen
+  in de kamer. Levert de hook geen apparaten op (bijv. geen toestemming, of
+  een browser zonder `setSinkId`-ondersteuning), dan toont het component
+  niets in plaats van een kapotte lege lijst.
 
 ### Hoe de video-layout werkt
 

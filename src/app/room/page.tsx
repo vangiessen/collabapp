@@ -17,6 +17,7 @@ import {
   useCreateLayoutContext,
   usePinnedTracks,
   useLocalParticipant,
+  useMediaDeviceSelect,
   isTrackReference,
   type TrackReference,
   type TrackReferenceOrPlaceholder,
@@ -390,6 +391,51 @@ function RemoteAudioMixerRow({ trackRef }: { trackRef: TrackReference }) {
   );
 }
 
+// Kiest het apparaat waarop je alle binnenkomende audio (van andere
+// deelnemers) hoort, bijv. een specifieke koptelefoon of de uitgang van een
+// audio-interface. Gebruikt LiveKit's eigen useMediaDeviceSelect, dat onder
+// water HTMLMediaElement.setSinkId() aanroept op alle audio-elementen in de
+// kamer. Niet elke browser ondersteunt dit (o.a. Firefox/Safari niet) — in
+// dat geval blijft de lijst met apparaten leeg en tonen we niets.
+function AudioOutputControl() {
+  const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
+    kind: "audiooutput",
+    requestPermissions: true,
+  });
+  const [error, setError] = useState("");
+
+  if (devices.length === 0) {
+    return null;
+  }
+
+  async function handleChange(deviceId: string) {
+    try {
+      await setActiveMediaDevice(deviceId);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Kon audio-uitgang niet wisselen.");
+    }
+  }
+
+  return (
+    <div className={styles.audioSlot}>
+      <span className={styles.audioSlotLabel}>Audio-uitgang</span>
+      <select
+        className={styles.select}
+        value={activeDeviceId}
+        onChange={(event) => handleChange(event.target.value)}
+      >
+        {devices.map((device) => (
+          <option key={device.deviceId} value={device.deviceId}>
+            {device.label || `Uitgang ${device.deviceId.slice(0, 6)}`}
+          </option>
+        ))}
+      </select>
+      {error && <span className={styles.slotError}>{error}</span>}
+    </div>
+  );
+}
+
 function RemoteAudioMixer() {
   const audioTracks = useTracks([Track.Source.Microphone, Track.Source.Unknown], {
     onlySubscribed: true,
@@ -551,6 +597,8 @@ function RoomUI({
             <AudioInputControl config={MUSIC_SLOT} devices={audioInputDevices} />
           </div>
         </div>
+
+        <AudioOutputControl />
 
         <RemoteAudioMixer />
 
