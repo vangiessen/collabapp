@@ -10,6 +10,21 @@ function isAuthorized(req: NextRequest): boolean {
   return provided === adminKey;
 }
 
+// Elke fout uit de opslaglaag (Redis niet geconfigureerd, database bestaat niet
+// meer, netwerk onbereikbaar) MOET als JSON teruggegeven worden. Anders stuurt
+// Next.js een leeg 500-antwoord en crasht de client op `res.json()` met de
+// cryptische melding "Unexpected end of JSON input".
+function storageError(context: string, e: unknown) {
+  console.error(`[admin/invites] ${context}`, e);
+  return NextResponse.json(
+    {
+      error:
+        "Kan de opslag (Upstash Redis) niet bereiken. Controleer UPSTASH_REDIS_REST_URL en UPSTASH_REDIS_REST_TOKEN, en of de Upstash-database nog bestaat.",
+    },
+    { status: 503 },
+  );
+}
+
 export async function GET(req: NextRequest) {
   if (!process.env.ADMIN_KEY) {
     return NextResponse.json(
@@ -21,7 +36,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Onjuiste admin-sleutel." }, { status: 401 });
   }
 
-  return NextResponse.json({ invites: await listInvites() });
+  try {
+    return NextResponse.json({ invites: await listInvites() });
+  } catch (e) {
+    return storageError("uitnodigingen ophalen mislukt", e);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -35,6 +54,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Onjuiste admin-sleutel." }, { status: 401 });
   }
 
-  const invite = await createInvite(DEFAULT_TTL_HOURS);
-  return NextResponse.json({ invite });
+  try {
+    const invite = await createInvite(DEFAULT_TTL_HOURS);
+    return NextResponse.json({ invite });
+  } catch (e) {
+    return storageError("link genereren mislukt", e);
+  }
 }

@@ -30,7 +30,17 @@ let redisClient: Redis | null = null;
 
 function getRedis(): Redis {
   if (!redisClient) {
-    redisClient = Redis.fromEnv();
+    // Bewust NIET Redis.fromEnv(): die logt alleen waarschuwingen en bouwt een
+    // client met lege url/token, die dan pas bij de eerste aanroep crasht met
+    // een onduidelijke fout. Een expliciete controle geeft een leesbare melding.
+    const url = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (!url || !token) {
+      throw new Error(
+        "Upstash Redis is niet geconfigureerd: UPSTASH_REDIS_REST_URL en/of UPSTASH_REDIS_REST_TOKEN ontbreken.",
+      );
+    }
+    redisClient = new Redis({ url, token });
   }
   return redisClient;
 }

@@ -47,9 +47,14 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/invites", {
       headers: { "x-admin-key": key },
     });
-    const data = await res.json();
+    // .catch(() => null): een lege of niet-JSON body mag nooit "Unexpected end
+    // of JSON input" opleveren — dan tonen we een leesbare melding.
+    const data = await res.json().catch(() => null);
     if (!res.ok) {
-      throw new Error(data.error ?? "Kon uitnodigingen niet ophalen.");
+      throw new Error(data?.error ?? `Kon uitnodigingen niet ophalen (serverfout ${res.status}).`);
+    }
+    if (!data) {
+      throw new Error("Onverwacht leeg antwoord van de server.");
     }
     return data.invites as Invite[];
   }, []);
@@ -58,9 +63,12 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/participants", {
       headers: { "x-admin-key": key },
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
     if (!res.ok) {
-      throw new Error(data.error ?? "Kon deelnemers niet ophalen.");
+      throw new Error(data?.error ?? `Kon deelnemers niet ophalen (serverfout ${res.status}).`);
+    }
+    if (!data) {
+      throw new Error("Onverwacht leeg antwoord van de server.");
     }
     return data.participants as Participant[];
   }, []);
@@ -158,9 +166,12 @@ export default function AdminPage() {
         method: "POST",
         headers: { "x-admin-key": adminKey },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(data.error ?? "Kon geen link genereren.");
+        throw new Error(data?.error ?? `Kon geen link genereren (serverfout ${res.status}).`);
+      }
+      if (!data) {
+        throw new Error("Onverwacht leeg antwoord van de server.");
       }
       const url = `${window.location.origin}/invite/${data.invite.token}`;
       setNewInviteUrl(url);
@@ -179,9 +190,9 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json", "x-admin-key": adminKey },
         body: JSON.stringify({ token }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(data.error ?? "Kon link niet intrekken.");
+        throw new Error(data?.error ?? `Kon link niet intrekken (serverfout ${res.status}).`);
       }
       await refreshInvites();
     } catch (err) {

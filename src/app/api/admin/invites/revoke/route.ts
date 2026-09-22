@@ -25,7 +25,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "token is verplicht." }, { status: 400 });
   }
 
-  const found = await revokeInvite(token);
+  let found: boolean;
+  try {
+    found = await revokeInvite(token);
+  } catch (e) {
+    // Zonder deze vangnet stuurt Next.js een leeg 500-antwoord en crasht de
+    // client op res.json() met "Unexpected end of JSON input".
+    console.error("[admin/invites/revoke] intrekken mislukt", e);
+    return NextResponse.json(
+      {
+        error:
+          "Kan de opslag (Upstash Redis) niet bereiken. Controleer UPSTASH_REDIS_REST_URL en UPSTASH_REDIS_REST_TOKEN, en of de Upstash-database nog bestaat.",
+      },
+      { status: 503 },
+    );
+  }
   if (!found) {
     return NextResponse.json({ error: "Token niet gevonden." }, { status: 404 });
   }
